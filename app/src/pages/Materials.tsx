@@ -1,7 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Material } from '../lib/types';
 import { clamp } from '../lib/format';
+import {
+  baseName,
+  findPdf,
+  forgetDirectory,
+  isSupported,
+  loadSavedDirectory,
+  permissionState,
+  pickDirectory,
+  requestPermission,
+} from '../lib/localFiles';
+
+const PdfPane = lazy(() => import('../components/PdfPane'));
 
 interface Hit {
   material_id: string;
@@ -11,11 +23,12 @@ interface Hit {
   score: number;
 }
 
+type DirHandle = Awaited<ReturnType<typeof loadSavedDirectory>>;
+
 /**
  * 資料タブ。
- * 購入教材のPDF本体はクラウドに置かない方針なので、ここで見るのは
- * 取り込み時に抽出したページ単位のテキスト（検索と所在の特定用）。
- * ページ番号が分かれば、手元のPDFをそのページで開ける。
+ * PDF 本体はクラウドに上げていない。ページ単位の抽出テキストで検索し、
+ * 手元の学習資料フォルダへの読み取り許可があれば、その場でPDFも描画する。
  */
 export default function Materials() {
   const [tab, setTab] = useState<'list' | 'search'>('list');
@@ -33,6 +46,15 @@ export default function Materials() {
   const [draft, setDraft] = useState<{ front: string; back: string } | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
+  // ローカルフォルダ連携
+  const supported = isSupported();
+  const [dir, setDir] = useState<DirHandle>(null);
+  const [perm, setPerm] = useState<PermissionState | null>(null);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfMissing, setPdfMissing] = useState(false);
+  const [view, setView] = useState<'pdf' | 'text'>('pdf');
+  const [pdfPages, setPdfPages] = useState<number | null>(null);
+
   useEffect(() => {
     supabase
       .from('materials')
@@ -44,13 +66,43 @@ export default function Materials() {
       });
   }, []);
 
+  useEffect(() => {
+    if (!supported) return;
+    void (async () => {
+      const h = await loadSavedDirectory();
+      if (!h) return;
+      setDir(h);
+      setPerm(await permissionState(h));
+    })();
+  }, [supported]);
+
   const openMaterial = useCallback((m: Material, startPage = 1) => {
     setErr(null);
     setOpen(m);
     setTab('list');
     setPage(clamp(startPage, 1, m.page_count ?? 1));
+    setPdfFile(null);
+    setPdfMissing(false);
+    setPdfPages(null);
   }, []);
 
+  // 開いている資料に対応するPDFを手元のフォルダから探す
+  useEffect(() => {
+    if (!open || !dir || perm !== 'granted') return;
+    let active = true;
+    setPdfMissing(false);
+    void (async () => {
+      const f = await findPdf(dir, baseName(open.source_path, open.title));
+      if (!active) return;
+      if (f) setPdfFile(f);
+      else setPdfMissing(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [open, dir, perm]);
+
+  // ページテキスト
   useEffect(() => {
     if (!open) return;
     let active = true;
@@ -71,6 +123,25 @@ export default function Materials() {
       active = false;
     };
   }, [open, page]);
+
+  async function connectFolder() {
+    setErr(null);
+    try {
+      const h = await pickDirectory();
+      setDir(h);
+      setPerm(await permissionState(h));
+    } catch (e) {
+      // ユーザーがキャンセルした場合は黙って戻る
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function regrant() {
+    if (!dir) return;
+    const ok = await requestPermission(dir);
+    setPerm(ok ? 'granted' : 'denied');
+  }
 
   async function runSearch(e?: React.FormEvent) {
     e?.preventDefault();
@@ -108,29 +179,88 @@ export default function Materials() {
     }
   }
 
-  const numPages = open?.page_count ?? 1;
+  const numPages = pdfPages ?? open?.page_count ?? 1;
+  const canShowPdf = !!pdfFile && perm === 'granted';
 
   return (
     <div className="stack">
       <div className="card">
-        <div className="row">
-          <button
-            className={`btn btn-sm ${tab === 'list' ? 'btn-primary' : ''}`}
-            onClick={() => setTab('list')}
-          >
-            資料
-          </button>
-          <button
-            className={`btn btn-sm ${tab === 'search' ? 'btn-primary' : ''}`}
-            onClick={() => setTab('search')}
-          >
-            全文検索
-          </button>
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <span className="row-tight">
+            <button
+              className={`btn btn-sm ${tab === 'list' ? 'btn-primary' : ''}`}
+              onClick={() => setTab('list')}
+            >
+              資料
+            </button>
+            <button
+              className={`btn btn-sm ${tab === 'search' ? 'btn-primary' : ''}`}
+              onClick={() => setTab('search')}
+            >
+              全文検索
+            </button>
+          </span>
+          {supported && perm === 'granted' && (
+            <span className="pill pill-accent" title="手元のフォルダを読み取り中">
+              フォルダ接続中
+            </span>
+          )}
         </div>
       </div>
 
       {err && <div className="alert alert-err">{err}</div>}
       {saved && <div className="alert alert-ok">{saved}</div>}
+
+      {/* ローカルフォルダの接続案内 */}
+      {tab === 'list' && supported && perm !== 'granted' && (
+        <div className="card">
+          <h2 className="sec">手元のPDFを表示する</h2>
+          <p className="small" style={{ marginTop: 0 }}>
+            学習資料フォルダへの読み取りを一度許可すると、アプリ内でPDFをそのまま見られます。
+            ファイルがアップロードされることはありません。
+          </p>
+          <div className="row">
+            {dir && perm === 'prompt' ? (
+              <button className="btn btn-primary btn-sm" onClick={() => void regrant()}>
+                フォルダへのアクセスを再許可
+              </button>
+            ) : (
+              <button className="btn btn-primary btn-sm" onClick={() => void connectFolder()}>
+                学習資料フォルダを選択
+              </button>
+            )}
+            {dir && (
+              <button
+                className="btn btn-sm"
+                onClick={() => {
+                  void forgetDirectory();
+                  setDir(null);
+                  setPerm(null);
+                  setPdfFile(null);
+                }}
+              >
+                記憶を消す
+              </button>
+            )}
+          </div>
+          {perm === 'denied' && (
+            <p className="mute2" style={{ marginBottom: 0 }}>
+              許可されませんでした。ブラウザのサイト設定からファイル編集の権限を見直すか、
+              もう一度フォルダを選択してください。
+            </p>
+          )}
+        </div>
+      )}
+
+      {tab === 'list' && !supported && (
+        <div className="card">
+          <p className="mute2" style={{ margin: 0 }}>
+            このブラウザはローカルフォルダの読み取りに対応していません（Chrome / Edge の
+            デスクトップ版のみ）。ここでは抽出テキストを表示します。図が必要なときは、
+            ページ番号を見て手元のPDFを開いてください。
+          </p>
+        </div>
+      )}
 
       {tab === 'search' && (
         <div className="card">
@@ -147,7 +277,7 @@ export default function Materials() {
             </button>
           </form>
           <p className="mute2" style={{ margin: '8px 0 0' }}>
-            空白区切りで AND 検索。`OR` も使えます（pgroonga による日本語全文検索）。
+            空白区切りで AND 検索。OR も使えます（pgroonga による日本語全文検索）。
           </p>
 
           {hits && (
@@ -189,26 +319,20 @@ export default function Materials() {
             <p className="small" style={{ margin: 0 }}>
               資料がまだありません。<code>学習資料/</code> に PDF を置いて、Mac のターミナルで
               <code> cd tools &amp;&amp; npm run ingest:materials </code>
-              を実行すると、各ページのテキストが取り込まれます。
+              を実行してください。
             </p>
           ) : (
-            <>
-              {materials.map((m) => (
-                <div className="list-item" key={m.id}>
-                  <div className="grow">
-                    <div className="t">{m.title}</div>
-                    <div className="mute2">{m.page_count ?? '?'} ページ</div>
-                  </div>
-                  <button className="btn btn-sm" onClick={() => openMaterial(m)}>
-                    開く
-                  </button>
+            materials.map((m) => (
+              <div className="list-item" key={m.id}>
+                <div className="grow">
+                  <div className="t">{m.title}</div>
+                  <div className="mute2">{m.page_count ?? '?'} ページ</div>
                 </div>
-              ))}
-              <p className="mute2" style={{ marginBottom: 0 }}>
-                PDF 本体はクラウドに置いていません。ここで見られるのは検索用に抽出した
-                テキストです。ページ番号を見て、手元の PDF を開いてください。
-              </p>
-            </>
+                <button className="btn btn-sm" onClick={() => openMaterial(m)}>
+                  開く
+                </button>
+              </div>
+            ))
           )}
         </div>
       )}
@@ -228,6 +352,7 @@ export default function Materials() {
               </button>
               <strong className="small">{open.title}</strong>
             </div>
+
             <div className="row" style={{ marginTop: 10, justifyContent: 'center' }}>
               <button
                 className="btn btn-sm"
@@ -254,36 +379,91 @@ export default function Materials() {
                 次
               </button>
             </div>
-          </div>
 
-          <div className="card">
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-              <h2 className="sec" style={{ margin: 0 }}>
-                p.{page} のテキスト
-              </h2>
-              {!draft && (
+            {canShowPdf && (
+              <div className="row" style={{ marginTop: 10, justifyContent: 'center' }}>
                 <button
-                  className="btn btn-sm"
-                  onClick={() => setDraft({ front: '', back: pageText.slice(0, 400) })}
+                  className={`btn btn-sm ${view === 'pdf' ? 'btn-primary' : ''}`}
+                  onClick={() => setView('pdf')}
                 >
-                  カードにする
+                  PDF
                 </button>
-              )}
-            </div>
-
-            {loadingPage ? (
-              <div className="row" style={{ justifyContent: 'center', padding: 16 }}>
-                <div className="spinner" />
-              </div>
-            ) : (
-              <div
-                className="qbody"
-                style={{ marginTop: 10, fontSize: 15, color: pageText ? undefined : 'var(--fg-mute)' }}
-              >
-                {pageText || '（このページにテキストはありません。図版のみのスライドの可能性があります）'}
+                <button
+                  className={`btn btn-sm ${view === 'text' ? 'btn-primary' : ''}`}
+                  onClick={() => setView('text')}
+                >
+                  テキスト
+                </button>
               </div>
             )}
           </div>
+
+          {canShowPdf && view === 'pdf' && (
+            <Suspense
+              fallback={
+                <div className="row" style={{ justifyContent: 'center', padding: 20 }}>
+                  <div className="spinner" />
+                </div>
+              }
+            >
+              <PdfPane file={pdfFile} page={page} onNumPages={setPdfPages} />
+            </Suspense>
+          )}
+
+          {pdfMissing && perm === 'granted' && (
+            <div className="card">
+              <p className="mute2" style={{ margin: 0 }}>
+                選択したフォルダに「{baseName(open.source_path, open.title)}」が見つかりませんでした。
+                学習資料フォルダ（またはその親）を選び直すと表示できます。
+              </p>
+            </div>
+          )}
+
+          {(!canShowPdf || view === 'text') && (
+            <div className="card">
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <h2 className="sec" style={{ margin: 0 }}>
+                  p.{page} のテキスト
+                </h2>
+                {!draft && (
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => setDraft({ front: '', back: pageText.slice(0, 400) })}
+                  >
+                    カードにする
+                  </button>
+                )}
+              </div>
+
+              {loadingPage ? (
+                <div className="row" style={{ justifyContent: 'center', padding: 16 }}>
+                  <div className="spinner" />
+                </div>
+              ) : (
+                <div
+                  className="qbody"
+                  style={{
+                    marginTop: 10,
+                    fontSize: 15,
+                    color: pageText ? undefined : 'var(--fg-mute)',
+                  }}
+                >
+                  {pageText || '（このページにテキストはありません。図版のみのスライドかもしれません）'}
+                </div>
+              )}
+            </div>
+          )}
+
+          {canShowPdf && view === 'pdf' && !draft && (
+            <div className="row" style={{ justifyContent: 'center' }}>
+              <button
+                className="btn btn-sm"
+                onClick={() => setDraft({ front: '', back: pageText.slice(0, 400) })}
+              >
+                このページをカードにする
+              </button>
+            </div>
+          )}
 
           {draft && (
             <div className="card">
