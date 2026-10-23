@@ -473,3 +473,39 @@ table.tbl td.num, table.tbl th.num { text-align: right; font-variant-numeric: ta
   .main { padding: 24px 24px 100px; }
   .grades .btn { min-height: 54px; }
 }
+
+/* ---------- 問題番号グリッド ---------- */
+.numgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+  gap: 7px;
+}
+.numcell {
+  aspect-ratio: 1;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  background: var(--card-2);
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: filter 0.12s ease;
+}
+.numcell:hover { filter: brightness(1.15); }
+.numcell.ok {
+  border-color: var(--good);
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 14%, var(--card-2));
+}
+.numcell.ng {
+  border-color: var(--again);
+  color: var(--again);
+  background: color-mix(in srgb, var(--again) 14%, var(--card-2));
+}
+.numcell.sel {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.good-btn { border-color: var(--good); color: var(--good); }
+.again-btn { border-color: var(--again); color: var(--again); }

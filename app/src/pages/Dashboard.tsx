@@ -182,8 +182,7 @@ export default function Dashboard() {
           </div>
         )}
         <p className="mute2" style={{ marginBottom: 0, marginTop: 10 }}>
-          取り込み済みの問題: 科目A-1 {qbank.a1 ?? 0}問 / 科目A-2 {qbank.a2 ?? 0}問 / 科目B{' '}
-          {qbank.b ?? 0}問
+          記録した問題: 科目A-1 {qbank.a1 ?? 0}問 / 科目A-2 {qbank.a2 ?? 0}問 / 科目B {qbank.b ?? 0}問
         </p>
       </div>
     </div>

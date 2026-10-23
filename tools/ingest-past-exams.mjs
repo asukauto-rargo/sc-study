@@ -99,7 +99,12 @@ async function filesIn(dir) {
 async function main() {
   const { supabase, userId } = await connect();
   const dry = hasFlag('dry-run');
-  const only = arg('only', null);
+  // --only は am1 / am2（ダウンロード側の呼び方）でも a1 / a2 でも受け付ける
+  const onlyRaw = arg('only', null);
+  const only = onlyRaw ? { am1: 'a1', am2: 'a2', a1: 'a1', a2: 'a2' }[String(onlyRaw)] ?? null : null;
+  if (onlyRaw && !only) {
+    console.warn(`--only ${onlyRaw} は不明です。am1 / am2 を指定してください。全区分を対象にします。`);
+  }
   const onlySitting = arg('sitting', null);
   const dumpPath = arg('dump', null);
 
