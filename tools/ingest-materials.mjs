@@ -54,6 +54,9 @@ async function main() {
   const { supabase, userId } = await connect();
   const force = hasFlag('force');
   const makeDrafts = hasFlag('draft-cards');
+  // PDF 本体のアップロードは既定で行わない（購入教材を外部に置かないため）。
+  // アプリ内でPDFを描画したい場合だけ --upload-pdf を付ける。
+  const uploadPdf = hasFlag('upload-pdf');
 
   const files = await listPdfs(MATERIALS_DIR);
   if (files.length === 0) {
@@ -61,10 +64,13 @@ async function main() {
     return;
   }
   console.log(`${files.length} 件の PDF を確認します`);
+  const failed = [];
 
+  let title;
   for (const file of files) {
+    try {
     const sourcePath = relative(REPO_DIR, file);
-    const title = basename(file, '.pdf');
+    title = basename(file, '.pdf');
     const bytes = await readFile(file);
     const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 32);
 
@@ -81,19 +87,23 @@ async function main() {
 
     console.log(`→ ${title} を解析中…`);
     const pages = await extractPages(file);
-    const storagePath = `${userId}/${hash}-${encodeURIComponent(title)}.pdf`;
+    // Supabase Storage のキーは使える文字が限られ、% や日本語は弾かれる。
+    // 内容ハッシュだけにすれば常に安全。表示名は materials.title が持っている。
+    const storagePath = `${userId}/${hash}.pdf`;
 
-    const up = await supabase.storage
-      .from(BUCKET)
-      .upload(storagePath, bytes, { contentType: 'application/pdf', upsert: true });
-    if (up.error) throw new Error(`アップロード失敗: ${up.error.message}`);
+    if (uploadPdf) {
+      const up = await supabase.storage
+        .from(BUCKET)
+        .upload(storagePath, bytes, { contentType: 'application/pdf', upsert: true });
+      if (up.error) throw new Error(`アップロード失敗: ${up.error.message}`);
+    }
 
     const row = {
       user_id: userId,
       title,
       kind: 'pdf',
       source_path: sourcePath,
-      storage_path: storagePath,
+      storage_path: uploadPdf ? storagePath : null,
       page_count: pages.length,
       content_hash: hash,
     };
@@ -144,8 +154,17 @@ async function main() {
       }
       console.log(`  ✓ 下書きカード ${drafts.length}枚（保留状態。アプリの「カード」で確認して復帰）`);
     }
-  }
+      } catch (e) {
+      failed.push({ name: title ?? file.split('/').pop(), message: e.message });
+      console.warn(`  ✗ 失敗: ${e.message}`);
+    }
+}
 
+  if (failed.length) {
+    console.log(`\n${failed.length} 件が失敗しました:`);
+    for (const f of failed) console.log(`  - ${f.name}: ${f.message}`);
+    console.log('再実行すると、成功済みのぶんは飛ばして失敗分だけやり直します。');
+  }
   console.log('\n完了。アプリの「資料」タブで開けます。');
 }
 

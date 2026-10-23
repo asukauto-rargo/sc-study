@@ -1,11 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import * as pdfjs from 'pdfjs-dist';
-import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Material } from '../lib/types';
 import { clamp } from '../lib/format';
-
-pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 interface Hit {
   material_id: string;
@@ -15,147 +11,104 @@ interface Hit {
   score: number;
 }
 
+/**
+ * 資料タブ。
+ * 購入教材のPDF本体はクラウドに置かない方針なので、ここで見るのは
+ * 取り込み時に抽出したページ単位のテキスト（検索と所在の特定用）。
+ * ページ番号が分かれば、手元のPDFをそのページで開ける。
+ */
 export default function Materials() {
   const [tab, setTab] = useState<'list' | 'search'>('list');
   const [materials, setMaterials] = useState<Material[]>([]);
   const [open, setOpen] = useState<Material | null>(null);
   const [page, setPage] = useState(1);
   const [pageText, setPageText] = useState('');
-  const [rendering, setRendering] = useState(false);
+  const [loadingPage, setLoadingPage] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<Hit[] | null>(null);
   const [searching, setSearching] = useState(false);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const docRef = useRef<pdfjs.PDFDocumentProxy | null>(null);
-  const renderTask = useRef<pdfjs.RenderTask | null>(null);
+  const [draft, setDraft] = useState<{ front: string; back: string } | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
 
   useEffect(() => {
     supabase
       .from('materials')
       .select('*')
-      .order('created_at', { ascending: true })
+      .order('title')
       .then(({ data, error }) => {
         if (error) setErr(error.message);
         else setMaterials((data ?? []) as Material[]);
       });
   }, []);
 
-  // PDF を開く
-  const openMaterial = useCallback(async (m: Material, startPage = 1) => {
+  const openMaterial = useCallback((m: Material, startPage = 1) => {
     setErr(null);
     setOpen(m);
     setTab('list');
-    setPage(startPage);
-    docRef.current = null;
-    if (!m.storage_path) {
-      setErr('この資料にはPDFが紐づいていません。取り込みスクリプトを実行してください。');
-      return;
-    }
-    const { data, error } = await supabase.storage
-      .from('materials')
-      .createSignedUrl(m.storage_path, 3600);
-    if (error || !data) {
-      setErr(error?.message ?? '署名付きURLを取得できませんでした。');
-      return;
-    }
-    try {
-      const doc = await pdfjs.getDocument({ url: data.signedUrl }).promise;
-      docRef.current = doc;
-      setPage(clamp(startPage, 1, doc.numPages));
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
+    setPage(clamp(startPage, 1, m.page_count ?? 1));
   }, []);
 
-  // ページ描画
-  useEffect(() => {
-    const doc = docRef.current;
-    const canvas = canvasRef.current;
-    if (!doc || !canvas || !open) return;
-    let cancelled = false;
-
-    (async () => {
-      setRendering(true);
-      try {
-        renderTask.current?.cancel();
-        const p = await doc.getPage(clamp(page, 1, doc.numPages));
-        if (cancelled) return;
-        const wrapWidth = canvas.parentElement?.clientWidth ?? 800;
-        const base = p.getViewport({ scale: 1 });
-        const scale = Math.min(2.4, Math.max(0.6, (wrapWidth - 16) / base.width));
-        const viewport = p.getViewport({ scale: scale * (window.devicePixelRatio || 1) });
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        canvas.style.width = `${Math.floor(viewport.width / (window.devicePixelRatio || 1))}px`;
-        const task = p.render({ canvasContext: ctx, viewport });
-        renderTask.current = task;
-        await task.promise;
-      } catch (e) {
-        if (!cancelled && e instanceof Error && e.name !== 'RenderingCancelledException') {
-          setErr(e.message);
-        }
-      } finally {
-        if (!cancelled) setRendering(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [page, open]);
-
-  // そのページのテキスト（検索でヒットした文脈の確認用）
   useEffect(() => {
     if (!open) return;
+    let active = true;
+    setLoadingPage(true);
     supabase
       .from('material_pages')
       .select('text')
       .eq('material_id', open.id)
       .eq('page', page)
       .maybeSingle()
-      .then(({ data }) => setPageText((data as { text: string } | null)?.text ?? ''));
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) setErr(error.message);
+        setPageText((data as { text: string } | null)?.text ?? '');
+        setLoadingPage(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [open, page]);
 
   async function runSearch(e?: React.FormEvent) {
     e?.preventDefault();
     if (!q.trim()) return;
     setSearching(true);
-    const { data, error } = await supabase.rpc('search_pages', {
-      p_query: q.trim(),
-      p_limit: 40,
-    });
+    setErr(null);
+    const { data, error } = await supabase.rpc('search_pages', { p_query: q.trim(), p_limit: 40 });
     if (error) setErr(error.message);
     else setHits((data ?? []) as Hit[]);
     setSearching(false);
   }
 
-  async function makeCardFromPage() {
-    if (!open) return;
-    const front = prompt('カードの表（問い）を入力してください');
-    if (!front) return;
-    const back = prompt('カードの裏（答え）を入力してください', pageText.slice(0, 300));
-    if (!back) return;
+  async function saveCard() {
+    if (!draft || !open) return;
+    if (!draft.front.trim() || !draft.back.trim()) {
+      setErr('表と裏の両方を入力してください。');
+      return;
+    }
     const { data: u } = await supabase.auth.getUser();
     const { error } = await supabase.from('cards').insert({
       user_id: u.user!.id,
       deck: open.title,
-      front,
-      back,
+      front: draft.front.trim(),
+      back: draft.back.trim(),
       origin: 'material',
       source_material_id: open.id,
       source_page: page,
       note: `${open.title} p.${page}`,
     });
     if (error) setErr(error.message);
-    else alert('カードを追加しました。');
+    else {
+      setDraft(null);
+      setSaved(`カードを追加しました（${open.title} p.${page}）`);
+      setTimeout(() => setSaved(null), 4000);
+    }
   }
 
-  const numPages = docRef.current?.numPages ?? open?.page_count ?? 1;
+  const numPages = open?.page_count ?? 1;
 
   return (
     <div className="stack">
@@ -177,6 +130,7 @@ export default function Materials() {
       </div>
 
       {err && <div className="alert alert-err">{err}</div>}
+      {saved && <div className="alert alert-ok">{saved}</div>}
 
       {tab === 'search' && (
         <div className="card">
@@ -184,7 +138,7 @@ export default function Materials() {
             <input
               className="grow"
               type="search"
-              placeholder="例: SPF DKIM、セッション固定化、CVSS"
+              placeholder="例: SPF DMARC、セッション固定化、CVSS"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
@@ -193,7 +147,7 @@ export default function Materials() {
             </button>
           </form>
           <p className="mute2" style={{ margin: '8px 0 0' }}>
-            空白で区切ると AND 検索になります（pgroonga による日本語全文検索）。
+            空白区切りで AND 検索。`OR` も使えます（pgroonga による日本語全文検索）。
           </p>
 
           {hits && (
@@ -201,24 +155,27 @@ export default function Materials() {
               {hits.length === 0 ? (
                 <p className="mute2">ヒットなし。</p>
               ) : (
-                hits.map((h) => (
-                  <div className="hit" key={`${h.material_id}-${h.page}`}>
-                    <div className="row-tight">
-                      <span className="pill">{h.material_title}</span>
-                      <span className="pill">p.{h.page}</span>
+                <>
+                  <p className="mute2">{hits.length}件</p>
+                  {hits.map((h) => (
+                    <div className="hit" key={`${h.material_id}-${h.page}`}>
+                      <div className="row-tight">
+                        <span className="pill">{h.material_title}</span>
+                        <span className="pill">p.{h.page}</span>
+                      </div>
+                      <div className="snippet">{h.snippet}</div>
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => {
+                          const m = materials.find((x) => x.id === h.material_id);
+                          if (m) openMaterial(m, h.page);
+                        }}
+                      >
+                        このページを開く
+                      </button>
                     </div>
-                    <div className="snippet">{h.snippet}</div>
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => {
-                        const m = materials.find((x) => x.id === h.material_id);
-                        if (m) void openMaterial(m, h.page);
-                      }}
-                    >
-                      このページを開く
-                    </button>
-                  </div>
-                ))
+                  ))}
+                </>
               )}
             </div>
           )}
@@ -232,20 +189,26 @@ export default function Materials() {
             <p className="small" style={{ margin: 0 }}>
               資料がまだありません。<code>学習資料/</code> に PDF を置いて、Mac のターミナルで
               <code> cd tools &amp;&amp; npm run ingest:materials </code>
-              を実行すると、PDF本体と各ページのテキストが取り込まれます。
+              を実行すると、各ページのテキストが取り込まれます。
             </p>
           ) : (
-            materials.map((m) => (
-              <div className="list-item" key={m.id}>
-                <div className="grow">
-                  <div className="t">{m.title}</div>
-                  <div className="mute2">{m.page_count ?? '?'} ページ</div>
+            <>
+              {materials.map((m) => (
+                <div className="list-item" key={m.id}>
+                  <div className="grow">
+                    <div className="t">{m.title}</div>
+                    <div className="mute2">{m.page_count ?? '?'} ページ</div>
+                  </div>
+                  <button className="btn btn-sm" onClick={() => openMaterial(m)}>
+                    開く
+                  </button>
                 </div>
-                <button className="btn btn-sm" onClick={() => void openMaterial(m)}>
-                  開く
-                </button>
-              </div>
-            ))
+              ))}
+              <p className="mute2" style={{ marginBottom: 0 }}>
+                PDF 本体はクラウドに置いていません。ここで見られるのは検索用に抽出した
+                テキストです。ページ番号を見て、手元の PDF を開いてください。
+              </p>
+            </>
           )}
         </div>
       )}
@@ -254,13 +217,23 @@ export default function Materials() {
         <>
           <div className="card">
             <div className="row" style={{ justifyContent: 'space-between' }}>
-              <button className="btn btn-sm" onClick={() => setOpen(null)}>
+              <button
+                className="btn btn-sm"
+                onClick={() => {
+                  setOpen(null);
+                  setDraft(null);
+                }}
+              >
                 ← 一覧
               </button>
               <strong className="small">{open.title}</strong>
             </div>
             <div className="row" style={{ marginTop: 10, justifyContent: 'center' }}>
-              <button className="btn btn-sm" onClick={() => setPage((p) => clamp(p - 1, 1, numPages))}>
+              <button
+                className="btn btn-sm"
+                onClick={() => setPage((p) => clamp(p - 1, 1, numPages))}
+                disabled={page <= 1}
+              >
                 前
               </button>
               <input
@@ -273,32 +246,76 @@ export default function Materials() {
                 style={{ width: 86, textAlign: 'center' }}
               />
               <span className="mute2">/ {numPages}</span>
-              <button className="btn btn-sm" onClick={() => setPage((p) => clamp(p + 1, 1, numPages))}>
+              <button
+                className="btn btn-sm"
+                onClick={() => setPage((p) => clamp(p + 1, 1, numPages))}
+                disabled={page >= numPages}
+              >
                 次
               </button>
             </div>
           </div>
 
-          <div className="pdfwrap">
-            <canvas ref={canvasRef} />
-          </div>
-          {rendering && (
-            <div className="row" style={{ justifyContent: 'center' }}>
-              <div className="spinner" />
-            </div>
-          )}
-
           <div className="card">
             <div className="row" style={{ justifyContent: 'space-between' }}>
-              <h2 className="sec" style={{ margin: 0 }}>このページのテキスト</h2>
-              <button className="btn btn-sm" onClick={() => void makeCardFromPage()}>
-                カードにする
-              </button>
+              <h2 className="sec" style={{ margin: 0 }}>
+                p.{page} のテキスト
+              </h2>
+              {!draft && (
+                <button
+                  className="btn btn-sm"
+                  onClick={() => setDraft({ front: '', back: pageText.slice(0, 400) })}
+                >
+                  カードにする
+                </button>
+              )}
             </div>
-            <div className="pagetext" style={{ marginTop: 8 }}>
-              {pageText || '（テキストなし）'}
-            </div>
+
+            {loadingPage ? (
+              <div className="row" style={{ justifyContent: 'center', padding: 16 }}>
+                <div className="spinner" />
+              </div>
+            ) : (
+              <div
+                className="qbody"
+                style={{ marginTop: 10, fontSize: 15, color: pageText ? undefined : 'var(--fg-mute)' }}
+              >
+                {pageText || '（このページにテキストはありません。図版のみのスライドの可能性があります）'}
+              </div>
+            )}
           </div>
+
+          {draft && (
+            <div className="card">
+              <h2 className="sec">カードを作る</h2>
+              <label className="field">
+                <span>表（問い）— 自分の言葉で問いの形にすると定着しやすい</span>
+                <textarea
+                  value={draft.front}
+                  onChange={(e) => setDraft({ ...draft, front: e.target.value })}
+                  style={{ minHeight: 90 }}
+                  autoFocus
+                />
+              </label>
+              <label className="field">
+                <span>裏（答え）</span>
+                <textarea
+                  value={draft.back}
+                  onChange={(e) => setDraft({ ...draft, back: e.target.value })}
+                  style={{ minHeight: 140 }}
+                />
+              </label>
+              <div className="row">
+                <button className="btn btn-primary" onClick={() => void saveCard()}>
+                  保存
+                </button>
+                <button className="btn" onClick={() => setDraft(null)}>
+                  キャンセル
+                </button>
+                <span className="mute2">分野は「{open.title}」になります</span>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

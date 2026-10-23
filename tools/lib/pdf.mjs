@@ -7,7 +7,8 @@ import { readFile } from 'node:fs/promises';
 export async function extractPages(path) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const data = new Uint8Array(await readFile(path));
-  const doc = await pdfjs.getDocument({ data, useSystemFonts: true }).promise;
+  // verbosity: 0 でエラー以外を出さない。描画はしないので canvas 関連の警告は不要。
+  const doc = await pdfjs.getDocument({ data, useSystemFonts: true, verbosity: 0 }).promise;
 
   const pages = [];
   for (let i = 1; i <= doc.numPages; i++) {
