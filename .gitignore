@@ -1,0 +1,25 @@
+# ===== 著作物・個人データ（絶対にコミットしない） =====
+# 購入した講座教材。公開リポジトリに入れてはいけない
+学習資料/
+# IPA からダウンロードした過去問PDF（再取得できるので持たない）
+過去問/
+# 教材から作ったカードなど、手元だけに置くシード
+seeds/*.local.json
+*.local.json
+
+# ===== 認証情報 =====
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ===== ビルド成果物 =====
+node_modules/
+dist/
+*.tsbuildinfo
+
+# ===== OS / エディタ =====
+.DS_Store
+.vscode/
+.idea/
+*.log

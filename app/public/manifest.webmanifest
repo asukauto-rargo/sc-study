@@ -1,0 +1,14 @@
+{
+  "name": "情報処理安全確保支援士 学習",
+  "short_name": "セキスペ学習",
+  "description": "忘却曲線にそった復習と過去問演習",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

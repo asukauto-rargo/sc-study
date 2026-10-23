@@ -1,0 +1,17 @@
+{
+  "name": "sc-study-tools",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "学習資料とIPA過去問をSupabaseへ取り込むスクリプト群（Macのターミナルで実行する）",
+  "scripts": {
+    "download": "node download-past-exams.mjs",
+    "ingest:materials": "node ingest-materials.mjs",
+    "ingest:past-exams": "node ingest-past-exams.mjs",
+    "ingest:cards": "node ingest-cards.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.48.0",
+    "pdfjs-dist": "^4.10.38"
+  }
+}
