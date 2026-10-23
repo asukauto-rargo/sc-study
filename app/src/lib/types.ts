@@ -10,8 +10,6 @@ export interface Card {
   back: string;
   note: string | null;
   tags: string[];
-  source_material_id: string | null;
-  source_page: number | null;
   origin: CardOrigin;
   origin_ref: string | null;
   suspended: boolean;
@@ -24,23 +22,6 @@ export interface Card {
   last_reviewed_at: string | null;
   created_at: string;
   updated_at: string;
-}
-
-export interface Material {
-  id: string;
-  title: string;
-  kind: 'pdf' | 'note';
-  source_path: string | null;
-  storage_path: string | null;
-  page_count: number | null;
-  created_at: string;
-}
-
-export interface MaterialPage {
-  id: number;
-  material_id: string;
-  page: number;
-  text: string;
 }
 
 export interface ExamSitting {

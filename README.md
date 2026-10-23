@@ -3,10 +3,24 @@
 忘却曲線（間隔反復）で知識を定着させ、過去問の演習記録を蓄積するための個人用Webアプリ。
 スマホでもPCでも同じURLで開けて、データはすべてクラウドに残る。
 
+公開URL: https://asukauto-rargo.github.io/sc-study/
+
 - **フロント**: Vite + React + TypeScript（素のCSS、依存は最小）
-- **データ**: Supabase（Postgres + 認証 + ストレージ）
+- **データ**: Supabase（Postgres + 認証）
 - **公開**: GitHub Pages（`main` に push すると GitHub Actions が自動デプロイ）
-- **検索**: pgroonga による日本語全文検索
+
+## 方針：教材の複製は持たない
+
+講座教材（購入コンテンツ）は、PDFもテキストも**このアプリとデータベースには一切置かない**。
+Udemy の利用規約が受講生に与えるのは「サービス経由で閲覧するライセンス」のみで、
+複製・送信・譲渡は書面による許可なしには認められていないため。
+
+このアプリに入るのは次の2つだけ。
+
+1. **自分の言葉で書いた復習カード** — 教材の転載ではなく、要点を設問の形に組み立て直したもの
+2. **IPA が公表している過去問** — IPA は再利用を許諾している（出典明記が条件）
+
+資料そのものは手元の `学習資料/` フォルダで読む。`.gitignore` 済みなのでリポジトリにも入らない。
 
 ## できること
 
@@ -17,82 +31,59 @@
 | カード | カードの追加・編集・保留・初期化。分野で絞り込み |
 | 問題 | 科目A-1 / A-2 の四肢択一ドリル。誤答は自動で復習キューに入る。解説は過去問道場へリンク |
 | 問題 → 科目B | 本番と同じ「画面で長文を読んでキーボードで解答」の練習。タイマーと自己採点つき |
-| 資料 | 学習資料PDFのビューアと全文検索。検索結果から該当ページを直接開ける |
 
 ---
 
-## 1. 初回セットアップ
+## 1. セットアップ
 
-### 1-1. GitHub にリポジトリを作って push
-
-```bash
-cd ~/Desktop/App_Dev/IT/情報処理安全確保支援士
-git init -b main
-git add .
-git commit -m "情報処理安全確保支援士 学習アプリ"
-
-# github.com で空のリポジトリ sc-study を作ってから
-git remote add origin https://github.com/<ユーザー名>/sc-study.git
-git push -u origin main
-```
-
-> リポジトリ名を `sc-study` 以外にする場合は `app/vite.config.ts` の `base` の既定値も
-> 合わせて変えること（GitHub Actions 側はリポジトリ名を自動で使う）。
-
-### 1-2. GitHub Pages を有効化
-
-リポジトリの **Settings → Pages → Build and deployment → Source** を
-**GitHub Actions** にする。これだけで、以後 `main` に push するたびに自動デプロイされる。
-
-公開URL: `https://<ユーザー名>.github.io/sc-study/`
-
-### 1-3. アカウントを作る
+### アプリを使い始める
 
 公開URLを開いて「はじめて使う（アカウント作成）」からメールアドレスとパスワードを登録する。
+Supabase の Authentication → Sign In / Providers → Email → Confirm email はオフにしてあるので、
+登録した瞬間に使える。
 
-Supabase の既定では確認メールが飛ぶ。面倒なら
-**Supabase ダッシュボード → Authentication → Sign In / Providers → Email → Confirm email** を
-オフにしておくと、登録した瞬間に使えるようになる。
-
-### 1-4. ローカル開発（任意）
+### ローカル開発
 
 ```bash
 cd app
-cp .env.example .env.local
 npm install
 npm run dev -- --host     # http://localhost:5173
 ```
 
+接続先は `app/src/lib/supabase.ts` に既定値が入っている（publishable key は公開前提の鍵で、
+データの保護は RLS が担っているのでリポジトリに入っていて問題ない）。
+別の Supabase プロジェクトに向けたいときだけ `app/.env.local` を作って上書きする。
+
+### デプロイ
+
+`main` に push するだけ。GitHub Actions が `app/` をビルドして Pages に公開する。
+Pages の Source は **GitHub Actions** に設定済み。
+
 ---
 
-## 2. 学習資料を取り込む
+## 2. カードを入れる
 
-`学習資料/` に PDF を置いて、取り込みスクリプトを1回走らせるだけ。
-あとから PDF を足したら、もう一度実行すれば差分だけ入る。
+`seeds/*.json` に書いたカードを取り込む。`*.local.json` は `.gitignore` 済みなので、
+手元だけに置きたいカードはそちらに書く。
 
 ```bash
 cd tools
 cp .env.example .env        # SC_EMAIL / SC_PASSWORD を自分のものにする
 npm install
-npm run ingest:materials
+npm run ingest:cards
 ```
 
-やっていること:
+JSONの形式:
 
-- PDF 本体を Supabase の非公開ストレージへ（アプリ内ビューアで表示するため）
-- 各ページのテキストを `material_pages` へ（日本語全文検索のため）
-
-スライドごとに下書きカードも作りたい場合:
-
-```bash
-npm run ingest:materials -- --draft-cards
+```json
+[
+  { "deck": "暗号技術", "front": "…", "back": "…", "note": "…", "tags": ["…"], "key": "crypto-001" }
+]
 ```
 
-下書きカードは **保留状態** で入る。アプリの「カード」で「保留中も表示」にして中身を見て、
-使えるものだけ「復帰」させると復習キューに流れてくる。
+`key` は再実行時の重複防止に使う。省略すると `deck` と `front` から自動生成される。
 
-> `学習資料/` は `.gitignore` 済み。購入した講座教材が公開リポジトリに出ないようにしている。
-> 教材から作ったカードも `seeds/*.local.json` に置けば同様に除外される。
+カードはアプリの「カード」画面からも直接追加・編集できる。
 
 ---
 
@@ -187,24 +178,23 @@ SM-2 をベースにした間隔反復。採点は4段階。
 .
 ├── app/                    # Webアプリ（GitHub Pages に公開される）
 │   ├── src/pages/          # 画面
-│   ├── src/lib/            # Supabaseクライアント、型、整形
-│   └── .env.production     # 公開可能な接続設定
-├── tools/                  # Macのターミナルで実行する取り込みスクリプト
+│   └── src/lib/            # Supabaseクライアント、型、整形
+├── tools/                  # Macのターミナルで実行するスクリプト
 │   ├── download-past-exams.mjs
-│   ├── ingest-materials.mjs
 │   ├── ingest-past-exams.mjs
-│   └── ingest-cards.mjs
-├── supabase/migrations/    # スキーマ（適用済み）
+│   ├── ingest-cards.mjs
+│   └── purge-storage.mjs   # 誤ってアップロードしたものを消す保険
+├── supabase/migrations/    # スキーマ
 ├── seeds/                  # カードのシード（*.local.json は git管理外）
-├── 学習資料/                # 講座PDF（git管理外）
+├── 学習資料/                # 講座PDF（git管理外。アプリには取り込まない）
 └── 過去問/                  # IPA公表PDF（git管理外）
 ```
 
 ## 7. よくある操作
 
 ```bash
-# 資料を足したあと
-cd tools && npm run ingest:materials
+# カードを足したあと
+cd tools && npm run ingest:cards
 
 # 過去問を足したあと
 cd tools && npm run download -- --sitting 07_aki && npm run ingest:past-exams

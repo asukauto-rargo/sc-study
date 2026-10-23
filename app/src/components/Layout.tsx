@@ -7,7 +7,6 @@ const tabs = [
   { to: '/review', label: '復習', d: 'M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4' },
   { to: '/cards', label: 'カード', d: 'M4 7h16v12H4zM4 7l2-3h12l2 3' },
   { to: '/practice', label: '問題', d: 'M9 7h8M9 12h8M9 17h5M5 7h.01M5 12h.01M5 17h.01' },
-  { to: '/materials', label: '資料', d: 'M6 4h8l4 4v12H6zM14 4v4h4' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

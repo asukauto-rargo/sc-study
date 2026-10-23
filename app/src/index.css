@@ -106,7 +106,7 @@ button, input, textarea, select {
   right: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   background: color-mix(in srgb, var(--bg-soft) 94%, transparent);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
